@@ -1,6 +1,6 @@
 # Variable-Decorrelation
 
-This repository accompanies the paper ``Stabilizing Lasso through Variable Decorrelation'' and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript.
+This repository accompanies the paper ''Stabilizing Lasso through Variable Decorrelation'' and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript.
 
 ---
 
