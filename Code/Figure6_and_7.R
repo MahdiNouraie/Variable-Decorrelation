@@ -1,0 +1,1433 @@
+# This script reproduces Figure 6 and 7 of the paper
+options(warn=-1) # Turn off warnings
+if (!requireNamespace("MASS")) {install.packages("MASS")} # install package if not already installed
+if (!requireNamespace("glmnet")) {install.packages("glmnet")} # install package if not already installed
+if (!requireNamespace("ggplot2")) {install.packages("ggplot2")} # install package if not already installed
+if (!requireNamespace("reshape2")) {install.packages("reshape2")} # install package if not already installed
+if (!requireNamespace("ncvreg")) {install.packages("ncvreg")} # install package if not already installed
+if (!requireNamespace("SGL")) {install.packages("SGL")} # install package if not already installed
+if (!requireNamespace("cmna")) {install.packages("cmna")} # install package if not already installed
+if (!requireNamespace("devtools")) {install.packages("devtools")} # install package if not already installed
+devtools::install_github("JLSteenwyk/ggpubfigs")
+
+
+# Load necessary library
+library(MASS) # load the MASS package for mvrnorm
+library(glmnet) # load the glmnet package for Lasso
+library(ggplot2) # Load the ggplot2 package for plotting
+library(reshape2) # Load the reshape2 package for reshaping data
+library(ncvreg) # Load the ncvreg package for SCAD and MCP
+library(SGL) # Load the SGL package for sparse group lasso
+library(cmna) # Load the cmna package for newtons method
+library(ggpubfigs) # Load the ggpubfigs package for color-blind friendly colors
+
+# sessionInfo() # Check the R version and loaded packages
+#R version 4.4.2 (2024-10-31)
+#Platform: aarch64-apple-darwin20
+#Running under: macOS Sequoia 15.3.1
+
+#Matrix products: default
+#BLAS:   /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib 
+#LAPACK: /Library/Frameworks/R.framework/Versions/4.4-arm64/Resources/lib/libRlapack.dylib;  LAPACK version 3.12.0
+
+#locale:
+#  [1] en_US.UTF-8/en_US.UTF-8/en_US.UTF-8/C/en_US.UTF-8/en_US.UTF-8
+
+#time zone: Australia/Sydney
+#tzcode source: internal
+
+#attached base packages:
+#  [1] stats     graphics  grDevices utils     datasets  methods   base     
+
+#other attached packages:
+#  [1] ggpubfigs_0.0.1 cmna_1.0.5      SGL_1.3         ncvreg_3.15.0  
+#[5] reshape2_1.4.4  ggplot2_3.5.2   glmnet_4.1-8    Matrix_1.7-1   
+#[9] MASS_7.3-64    
+
+#loaded via a namespace (and not attached):
+#  [1] generics_0.1.3    shape_1.4.6.1     stringi_1.8.4     lattice_0.22-6   
+#[5] digest_0.6.37     magrittr_2.0.3    grid_4.4.2        iterators_1.0.14 
+#[9] pkgload_1.4.0     fastmap_1.2.0     foreach_1.5.2     plyr_1.8.9       
+#[13] sessioninfo_1.2.3 pkgbuild_1.4.6    survival_3.8-3    urlchecker_1.0.1 
+#[17] promises_1.3.2    purrr_1.0.2       scales_1.3.0      codetools_0.2-20 
+#[21] cli_3.6.4         shiny_1.10.0      rlang_1.1.6       ellipsis_0.3.2   
+#[25] munsell_0.5.1     splines_4.4.2     withr_3.0.2       remotes_2.5.0    
+#[29] cachem_1.1.0      devtools_2.4.5    tools_4.4.2       memoise_2.0.1    
+#[33] dplyr_1.1.4       colorspace_2.1-1  httpuv_1.6.15     curl_6.0.1       
+#[37] vctrs_0.6.5       R6_2.6.1          mime_0.12         lifecycle_1.0.4  
+#[41] stringr_1.5.1     htmlwidgets_1.6.4 fs_1.6.5          usethis_3.1.0    
+#[45] miniUI_0.1.1.1    pkgconfig_2.0.3   pillar_1.10.2     later_1.4.1      
+#[49] gtable_0.3.6      profvis_0.4.0     glue_1.8.0        Rcpp_1.0.14      
+#[53] tibble_3.2.1      tidyselect_1.2.1  rstudioapi_0.17.1 xtable_1.8-4     
+#[57] htmltools_0.5.8.1 compiler_4.4.2   
+
+
+# AirHOLP (2025) from "https://github.com/Logic314/Air-HOLP"
+AirHOLP <- function(X, y, Threshold, r0 = 10, adapt = TRUE,
+                    iter = 10, Lambda, U, XU) {
+  # Arguments:-
+  # X: matrix of features (Matrix)
+  # y: response vector (Vector)
+  # Threshold: screening threshold (Integer)
+  # r0: initial penalties (Vector)
+  # adapt: if >= 1 adaptive penalty will be used (Binary)
+  # iter: maximum number of iterations for adaptive penalty selection (Integer)
+  # Lambda: eigenvalues of XXT, if missing the function will compute it (Vector)
+  # U: eigenvectors of XXT, if missing the function will compute it (Matrix)
+  # XU: X transpose times U, if missing the function will compute it (Matrix)
+  
+  # Output:-
+  # index_r: ranking of features by Air-HOLP (Matrix)
+  # index_r0: ranking of features by Ridge-HOLP (Matrix)
+  # Beta_r: regression coefficients of Air-HOLP (Matrix)
+  # Beta_r0: regression coefficients of Ridge-HOLP (Matrix)
+  # r: selected penalty parameters by Air-HOLP (Vector)
+  # iter_last: number of iterations used in Air-HOLP (Vector)
+  
+  n <- dim(X)[1] # sample size
+  p <- dim(X)[2] # number of features
+  q <- length(r0) # number of penalty parameters
+  iter_temp2 <- 0*(1:q) # used for calculating iter_last
+  iter_temp1 <- iter_temp2 - 1 # used for calculating iter_last
+  
+  # Standardizing X and y:
+  X <- X - matrix(rep(colMeans(X),each = n),n,p)
+  X <- X/matrix(rep(sqrt(colMeans(X^2)),each = n),n,p)
+  y <- (y - mean(y))/sd(y)
+  
+  if(adapt){
+    # Main computations:
+    if(missing(Lambda)|missing(U)){
+      XXT <- tcrossprod(X)
+      eXXT <- eigen(XXT)
+      Lambda <- eXXT$values
+      U <- eXXT$vectors
+    }
+    if(missing(XU)){
+      XU <- crossprod(X,U)
+    }
+    Dn <- diag(Lambda)
+    UTy <- crossprod(U,y)
+    yUD2UTy <- UTy^2*(Lambda^2)
+    
+    # Penalty selection:
+    r_max <- 1000*sqrt(n) # maximum penalty
+    max.iter <- 30 # maximum number of iterations for Newtons method
+    index_r <- matrix(1:(p*q), nrow = p, ncol = q)
+    index_r0 <- index_r
+    Beta_r <- index_r
+    Beta_r0 <- index_r
+    r <- r0
+    r_temp <- r0
+    for (j in 1:iter) {
+      for (i in 1:q) {
+        # Initial screening:
+        Beta_temp <- XU%*%((Lambda+r[i])^(-1)*UTy)
+        index_temp <- match(1:p,rank(-abs(Beta_temp), na.last = NA,
+                                     ties.method = c("random")))
+        Xs <- X[,index_temp[1:Threshold]] # Screened features
+        if(j<2) {
+          Beta_r0[,i] <- Beta_temp
+          index_r0[,i] <- rank(-abs(Beta_temp), na.last = NA,
+                               ties.method = c("random"))
+        }
+        
+        # Estimating the expected response:
+        ys <- Xs%*%(solve(crossprod(Xs) +
+                            diag(Threshold)*10^-12)%*%crossprod(Xs,y))
+        
+        # MSE functions:
+        ysUDUTy <- t(crossprod(ys,U)*Lambda)*UTy
+        Z <- function(lam) { # The function we minimize
+          t((Lambda+lam)^-2)%*%yUD2UTy - 2*t((Lambda+lam)^-1)%*%ysUDUTy
+        }
+        Z1 <- function(lam) { # First derivative
+          -2*t((Lambda+lam)^-3)%*%yUD2UTy + 2*t((Lambda+lam)^-2)%*%ysUDUTy
+        }
+        Z2 <- function(lam) { # Second derivative
+          6*t((Lambda+lam)^-4)%*%yUD2UTy - 4*t((Lambda+lam)^-3)%*%ysUDUTy
+        }
+        
+        # MSE minimization:
+        sol <- newton(Z1, Z2, 0.0001, tol = 0.001, m = max.iter)
+        r[i] <- sol
+        if(r[i] > r_max) {r[i] <- r_max}
+        if(r[i] < 0.0001) {r[i] <- 0.0001}
+        if(Z(r_max) < Z(r[i])) {r[i] <- r_max} # Checking boundaries
+        if(Z(0.0001) < Z(r[i])) {r[i] <- 0.0001}
+        
+        # Feature screening:
+        Beta_r[,i] <- XU%*%((Lambda+r[i])^(-1)*UTy)
+        index_r[,i] <- rank(-abs(Beta_r[,i]), na.last = NA,
+                            ties.method = c("random"))
+        
+        # Calculations for the number of iterations:
+        if(abs(r[i] - r_temp[i]) < 0.01*r[i]){ # Checking relative error
+          iter_temp1[i] <- j
+          iter_temp2[i] <- iter_temp2[i] + 1
+        }
+      }
+      if(sum(abs(r - r_temp) < 0.01*r) == q){ # Checking relative error
+        break
+      }
+      r_temp <- r
+    }
+    iter_last <- iter_temp1 - iter_temp2 + 1 # Number of iterations
+    AirHOLP <- list(index_r = index_r, index_r0 = index_r0, Beta_r = Beta_r,
+                    Beta_r0 = Beta_r0, r = r, iter_last = iter_last)
+  } else{
+    if(q < 2) {
+      # Feature screening:
+      if(missing(Lambda)|missing(U)){
+        Beta_r0 <- crossprod(X, solve(tcrossprod(X)+r0*diag(n),y))
+      } else{
+        UTy <- crossprod(U,y)
+        Beta_r0 <- XU%*%((Lambda+r0)^(-1)*UTy)
+      }
+      index_r0 <- rank(-abs(Beta_r0), na.last = NA, ties.method = c("random"))
+      AirHOLP <- list(index_r0 = index_r0, Beta_r0 = Beta_r0)
+    } else{
+      # Main computations:
+      if(missing(Lambda)|missing(U)){
+        XXT <- tcrossprod(X)
+        eXXT <- eigen(XXT)
+        Lambda <- eXXT$values
+        U <- eXXT$vectors
+      }
+      if(missing(XU)){
+        XU <- crossprod(X,U)
+      }
+      Dn <- diag(Lambda)
+      UTy <- crossprod(U,y)
+      
+      # Feature screening:
+      index_r <- matrix(1:(p*q), nrow = p, ncol = q)
+      for (i in 1:q) {
+        Beta_r0[,i] <- XU%*%((Lambda+r0[i])^(-1)*UTy)
+        index_r0[,i] <- rank(-abs(Beta_r0[,i]), na.last = NA,
+                             ties.method = c("random"))
+      }
+      AirHOLP <- list(index_r0 = index_r0, Beta_r0 = Beta_r0)
+    }
+  }
+}
+
+# Grahm-Schmidt QR decomposition from https://stackoverflow.com/questions/15584221/gram-schmidt-with-r
+grahm_schimdtR <- function(A) {
+  m <- nrow(A)
+  n <- ncol(A)
+  Q <- matrix(0, nrow = m, ncol = n)
+  R <- matrix(0, nrow = n, ncol = n)
+  for (j in 1:n) {
+    v <- A[ , j, drop = FALSE]
+    if (j > 1) {
+      for(i in 1:(j-1)) {
+        R[i, j] <- t(Q[,i,drop = FALSE]) %*% A[ , j, drop = FALSE]
+        v <- v - R[i, j] * Q[ ,i]
+      }
+    }
+    R[j, j] = norm(v, type = "2")
+    Q[ ,j] = v / R[j, j]
+  }
+  
+  list("Q" = Q, "R" = R)
+  
+}
+
+# Stability measure (2018) from "https://github.com/nogueirs/JMLR2018/blob/master/R/getStability.R"
+getStability <- function(X,alpha=0.05) {
+  ## the input X is a binary matrix of size M*d where:
+  ## M is the number of bootstrap replicates
+  ## d is the total number of features
+  ## alpha is the level of significance (e.g. if alpha=0.05, we will get 95% confidence intervals)
+  ## it's an optional argument and is set to 5% by default
+  ### first we compute the stability
+  
+  M<-nrow(X)
+  d<-ncol(X)
+  hatPF<-colMeans(X)
+  kbar<-sum(hatPF)
+  v_rand=(kbar/d)*(1-kbar/d)
+  stability<-1-(M/(M-1))*mean(hatPF*(1-hatPF))/v_rand ## this is the stability estimate
+  
+  ## then we compute the variance of the estimate
+  ki<-rowSums(X)
+  phi_i<-rep(0,M)
+  for(i in 1:M){ 
+    phi_i[i]<-(1/v_rand)*((1/d)*sum(X[i,]*hatPF)-(ki[i]*kbar)/d^2-(stability/2)*((2*kbar*ki[i])/d^2-ki[i]/d-kbar/d+1))
+  }
+  phi_bar=mean(phi_i)
+  var_stab=(4/M^2)*sum((phi_i-phi_bar)^2) ## this is the variance of the stability estimate
+  
+  ## then we calculate lower and upper limits of the confidence intervals
+  z<-qnorm(1-alpha/2) # this is the standard normal cumulative inverse at a level 1-alpha/2
+  upper<-stability+z*sqrt(var_stab) ## the upper bound of the (1-alpha) confidence interval
+  lower<-stability-z*sqrt(var_stab) ## the lower bound of the (1-alpha) confidence interval
+  
+  return(list("stability"=stability,"variance"=var_stab,"lower"=lower,"upper"=upper))
+  
+}
+
+
+
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+
+# Function to generate data
+generate_data <- function(n, p) {
+  if (p %% 5 != 0) {
+    stop("p must be divisible by 5")
+  }
+  
+  # Number of variables per group
+  group_size <- p / 5
+  
+  # Correlation values for each group
+  rho_values <- c(0.2, 0.4, 0.6, 0.8, 0.9)
+  
+  # Initialize covariance matrix
+  Sigma <- matrix(0, nrow = p, ncol = p)
+  
+  for (i in 1:5) {
+    start_idx <- (i - 1) * group_size + 1
+    end_idx <- i * group_size
+    
+    # Set correlation within the group
+    Sigma[start_idx:end_idx, start_idx:end_idx] <- rho_values[i]
+    diag(Sigma)[start_idx:end_idx] <- 1  # Set diagonal to 1
+  }
+  
+  # Generate correlated predictors
+  X <- mvrnorm(n = n, mu = rep(0, p), Sigma = Sigma)
+  
+  # Generate noise
+  epsilon <- rnorm(n, mean = 0, sd = 1)
+  
+  # Define beta coefficients
+  beta <- rep(0, p)  # Initialize all coefficients as zero
+  active_values <- c(4, 3.5, 3, 2.5, 2)  # Active variable values
+  active_indices <- seq(group_size, p, by = group_size)  # Last element of each group
+  beta[active_indices] <- active_values  # Assign active variable values
+  
+  # Generate response variable
+  response <- X %*% beta + epsilon
+  
+  # Combine predictors and response into a data frame
+  data <- cbind(Y = response, X)
+  
+  return(data)
+}
+
+
+# Stability Selection with Lasso without pre-processing
+Stability_values <- c() # Initialize an empty vector to store stability values
+TP6 <- c(); FP6 <- c(); FN6 <- c(); TN6 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP7 <- c(); FP7 <- c(); FN7 <- c(); TN7 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP8 <- c(); FP8 <- c(); FN8 <- c(); TN8 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP9 <- c(); FP9 <- c(); FN9 <- c(); TN9 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate dataset
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # Set column names of x
+  
+  cv_lasso <- cv.glmnet(x, y, nfolds = 10, alpha = 1) # Fit Lasso model with 10-fold CV
+  
+  candidate_set <- cv_lasso$lambda # Candidate set of lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      # Prepare the response and predictors
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      
+      # Fit the Lasso model with the current lambda
+      lasso_model <- glmnet(x_sub, y_sub, alpha = 1, lambda = lambda)
+      
+      # Extract significant predictors (ignoring the intercept, hence [-1])
+      significant_predictors <- ifelse(coef(lasso_model) != 0, 1, 0)[-1]
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values <- c(Stability_values, stab_values[index_of_stable_1sd]) # store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # Non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # Calculate column means of the selection matrix
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP6 <- c(TP6, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP6 <- c(FP6, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN6 <- c(FN6, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN6 <- c(TN6, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP7 <- c(TP7, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP7 <- c(FP7, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN7 <- c(FN7, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN7 <- c(TN7, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP8 <- c(TP8, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP8 <- c(FP8, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN8 <- c(FN8, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN8 <- c(TN8, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP9 <- c(TP9, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP9 <- c(FP9, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN9 <- c(FN9, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN9 <- c(TN9, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(cv_lasso, data, lasso_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors,
+   fn_count, fp_count, important_vars, non_important_vars,
+   selected_vars, tn_count, tp_count, n, p, k, j); gc() 
+
+
+
+
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+# Stability Selection with Lasso with pre-processing
+Stability_values2 <- c() # Initialize an empty vector to store stability values
+TP62 <- c(); FP62 <- c(); FN62 <- c(); TN62 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP72 <- c(); FP72 <- c(); FN72 <- c(); TN72 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP82 <- c(); FP82 <- c(); FN82 <- c(); TN82 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP92 <- c(); FP92 <- c(); FN92 <- c(); TN92 <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate dataset
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # Set column names of x
+  
+  Threshold <- 10 # Screening threshold
+  AHOLP <- AirHOLP(x, y, Threshold = Threshold, r0 = 10, adapt = TRUE, iter = 10) # Run AirHOLP
+  ranked_features <- AHOLP$index_r  # Ranking of features
+  # Convert ranks to column order
+  column_order <- order(ranked_features)  # Find the order that sorts ranks from 1 to p
+  
+  x_ranked <- x[, column_order]   # Reorder columns of X
+  names <- colnames(x_ranked) # store names of predictors
+  gram <- grahm_schimdtR(x_ranked) # Gram-Schmidt QR decomposition
+  x <- gram$Q # Q matrix
+  colnames(x) <- names # Set column names of x 
+  cv_lasso <- cv.glmnet(x, y, nfolds = 10, alpha = 1) # Fit Lasso model with 10-fold CV
+  
+  candidate_set <- cv_lasso$lambda # Candidate set of lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      # Prepare the response and predictors
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      
+      # Fit the Lasso model with the current lambda
+      lasso_model <- glmnet(x_sub, y_sub, alpha = 1, lambda = lambda)
+      
+      # Extract significant predictors (ignoring the intercept, hence [-1])
+      significant_predictors <- ifelse(coef(lasso_model) != 0, 1, 0)[-1]
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # Since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values2 <- c(Stability_values2, stab_values[index_of_stable_1sd]) # Store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # Non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # Calculate column means of the selection matrix
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP62 <- c(TP62, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP62 <- c(FP62, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN62 <- c(FN62, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN62 <- c(TN62, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP72 <- c(TP72, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP72 <- c(FP72, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN72 <- c(FN72, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN72 <- c(TN72, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP82 <- c(TP82, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP82 <- c(FP82, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN82 <- c(FN82, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN82 <- c(TN82, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP92 <- c(TP92, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP92 <- c(FP92, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN92 <- c(FN92, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN92 <- c(TN92, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(cv_lasso, data, lasso_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors, AHOLP, gram, ranked_features, x_ranked,
+   fn_count, fp_count, important_vars, non_important_vars, column_order,
+   selected_vars, tn_count, tp_count, n, p, j, k, Threshold, names); gc()
+
+
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+
+# Stability Selection with Elastic
+Stability_values_E <- c() # Initialize an empty vector to store stability values
+TP6E <- c(); FP6E <- c(); FN6E <- c(); TN6E <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP7E <- c(); FP7E <- c(); FN7E <- c(); TN7E <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP8E <- c(); FP8E <- c(); FN8E <- c(); TN8E <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP9E <- c(); FP9E <- c(); FN9E <- c(); TN9E <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate dataset
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # Set column names of x
+  
+  cv_ENet <- cv.glmnet(x, y, nfolds = 10, alpha = 0.2) # Fit ENet model with 10-fold CV
+  
+  candidate_set <- cv_ENet$lambda # Candidate set of lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      
+      # Fit the ENet model with the current lambda
+      ENet_model <- glmnet(x_sub, y_sub, alpha = 0.2, lambda = lambda)
+      
+      # Extract significant predictors (ignoring the intercept, hence [-1])
+      significant_predictors <- ifelse(coef(ENet_model) != 0, 1, 0)[-1]
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values_E <- c(Stability_values_E, stab_values[index_of_stable_1sd]) # store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # Non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # Calculate column means of the selection matrix
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP6E <- c(TP6E, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP6E <- c(FP6E, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN6E <- c(FN6E, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN6E <- c(TN6E, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP7E <- c(TP7E, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP7E <- c(FP7E, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN7E <- c(FN7E, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN7E <- c(TN7E, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP8E <- c(TP8E, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP8E <- c(FP8E, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN8E <- c(FN8E, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN8E <- c(TN8E, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP9E <- c(TP9E, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP9E <- c(FP9E, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN9E <- c(FN9E, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN9E <- c(TN9E, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(cv_lasso, data, ENet_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors,
+   fn_count, fp_count, important_vars, non_important_vars,
+   selected_vars, tn_count, tp_count, n, p, j, k); gc() 
+
+
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+
+# Stability Selection with SCAD
+Stability_values_S <- c() # Initialize an empty vector to store stability values
+TP6S <- c(); FP6S <- c(); FN6S <- c(); TN6S <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP7S <- c(); FP7S <- c(); FN7S <- c(); TN7S <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP8S <- c(); FP8S <- c(); FN8S <- c(); TN8S <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP9S <- c(); FP9S <- c(); FN9S <- c(); TN9S <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate datasets
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # Set column names of x
+  
+  cv_fit <- cv.ncvreg(x, y, penalty = "SCAD")  # Cross-validation
+  candidate_set <- cv_fit$lambda  # candidate lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      
+      # Fit SCAD
+      SCAD_fit <- ncvreg(x_sub, y_sub, penalty = "SCAD", lambda = lambda)
+      
+      # Extract significant predictors (ignoring the intercept, hence [-1])
+      significant_predictors <- ifelse(coef(SCAD_fit) != 0, 1, 0)[-1]
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # Since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values_S <- c(Stability_values_S, stab_values[index_of_stable_1sd]) # Store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # calculate column means
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP6S <- c(TP6S, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP6S <- c(FP6S, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN6S <- c(FN6S, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN6S <- c(TN6S, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP7S <- c(TP7S, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP7S <- c(FP7S, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN7S <- c(FN7S, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN7S <- c(TN7S, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP8S <- c(TP8S, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP8S <- c(FP8S, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN8S <- c(FN8S, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN8S <- c(TN8S, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP9S <- c(TP9S, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP9S <- c(FP9S, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN9S <- c(FN9S, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN9S <- c(TN9S, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(cv_fit, SCAD_fit, data, lasso_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y, j, k,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors,
+   fn_count, fp_count, important_vars, non_important_vars,
+   selected_vars, tn_count, tp_count, n, p); gc() 
+
+
+
+# Stability Selection with MCP
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+
+Stability_values_M <- c() # Initialize an empty vector to store stability values
+TP6M <- c(); FP6M <- c(); FN6M <- c(); TN6M <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP7M <- c(); FP7M <- c(); FN7M <- c(); TN7M <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP8M <- c(); FP8M <- c(); FN8M <- c(); TN8M <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP9M <- c(); FP9M <- c(); FN9M <- c(); TN9M <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate datasets
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # Set column names of x
+  
+  cv_fit <- cv.ncvreg(x, y, penalty = "MCP")  # Cross-validation
+  candidate_set <- cv_fit$lambda # candidate lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      
+      # Fit MCP
+      MCP_fit <- ncvreg(x_sub, y_sub, penalty = "MCP", lambda = lambda)
+      
+      # Extract significant predictors (ignoring the intercept, hence [-1])
+      significant_predictors <- ifelse(coef(MCP_fit) != 0, 1, 0)[-1]
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # Since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values_M <- c(Stability_values_M, stab_values[index_of_stable_1sd]) # Store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # Non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # Calculate column means
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP6M <- c(TP6M, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP6M <- c(FP6M, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN6M <- c(FN6M, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN6M <- c(TN6M, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP7M <- c(TP7M, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP7M <- c(FP7M, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN7M <- c(FN7M, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN7M <- c(TN7M, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP8M <- c(TP8M, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP8M <- c(FP8M, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN8M <- c(FN8M, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN8M <- c(TN8M, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP9M <- c(TP9M, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP9M <- c(FP9M, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN9M <- c(FN9M, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN9M <- c(TN9M, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(cv_fit, MCP_fit, data, lasso_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y, j, k,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors,
+   fn_count, fp_count, important_vars, non_important_vars,
+   selected_vars, tn_count, tp_count, n, p); gc() 
+
+# Stability Selection with SGL
+set.seed(26) # Set seed for reproducibility
+n <- 50  # Number of samples
+p <- 500  # Number of predictors
+
+Stability_values_SG <- c() # Initialize an empty vector to store stability values
+TP6SG <- c(); FP6SG <- c(); FN6SG <- c(); TN6SG <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.6
+TP7SG <- c(); FP7SG <- c(); FN7SG <- c(); TN7SG <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.7
+TP8SG <- c(); FP8SG <- c(); FN8SG <- c(); TN8SG <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.8
+TP9SG <- c(); FP9SG <- c(); FN9SG <- c(); TN9SG <- c() # Initialize vectors for TP, FP, FN, TN under threshold 0.9
+index <- rep(1:5, each = 100) # Define index for groups
+
+for (i in 1:100){
+  seed <- 26 + i
+  set.seed(seed) # Set seed for reproducibility
+  # Generate datasets
+  data <- generate_data(n, p)
+  
+  x <- as.matrix(data[, 2:ncol(data)]) # Predictors
+  y <- data[,1] # Response
+  
+  x <- scale(x)  # Standardize the predictors
+  y <- scale(y, scale = FALSE) # Center the response
+  colnames(x) <- paste0("V", 1:ncol(x)) # set columns names
+  
+  data_list <- list(x = x, y = y) # Prepare the data list for SGL
+  
+  SGL_cv <- cvSGL(data_list, index, type = 'linear') # Cross-validation
+  candidate_set <- SGL_cv$lambdas # candidate lambda values
+  
+  S_list <- vector("list", length(candidate_set)) # Initialize a list to store selection matrix for each lambda
+  names(S_list) <- paste0("lambda_", seq_along(candidate_set)) # Name the list entries
+  
+  B <- 100 # Number of subsamples
+  
+  # Stability Selection for each lambda in candidate_set
+  for (lambda_idx in seq_along(candidate_set)) {
+    
+    lambda <- candidate_set[lambda_idx]  # Current lambda value
+    S <- matrix(0, nrow = B, ncol = p)  # Initialize selection matrix for the current lambda
+    colnames(S) <- colnames(x) # Set column names of S to predictor names
+    
+    for (j in 1:B) { 
+      # sub-sampling the data (half of the original data without replacement)
+      sample_index <- sample(1:nrow(data), nrow(data) / 2, replace = FALSE) 
+      
+      x_sub <- x[sample_index, ] # Predictors
+      y_sub <- y[sample_index] # Response
+      sub_list <- list(x = x_sub, y = y_sub) # Prepare the data list for SGL
+      
+      SGL_model <- SGL(sub_list, index, type = 'linear', lambdas = lambda) # Fit SGL model
+      beta_hat <- SGL_model$beta # Extract coefficients
+      # Extract significant predictors
+      significant_predictors <- ifelse(beta_hat != 0, 1, 0)
+      
+      # Store the significant predictors in matrix S
+      S[j, ] <- significant_predictors
+    }
+    
+    # Store the matrix S for the current lambda in the corresponding list entry
+    S_list[[lambda_idx]] <- S
+  }
+  
+  stability_results <- lapply(S_list, function(S) { # Loop through regularization set and compute stability values
+    getStability(S) # Compute stability values
+  })
+  
+  stab_values <- c() # Initialize an empty vector to store stability values of each lambda
+  for (k in 1:length(candidate_set)) {
+    temp <- stability_results[[paste0("lambda_", k)]]$stability # Extract stability values
+    stab_values <- c(stab_values, temp) # Append stability values to the vector
+  }
+  
+  # Finding lambda stable_1sd
+  max_stability <- max(stab_values, na.rm = T) # Find the maximum stability value
+  stability_1sd_threshold <- max_stability - sd(stab_values, na.rm = T) # Define the stability threshold as max stability - 1SD
+  index_of_stable_1sd <- max(which(stab_values >= stability_1sd_threshold)) # since candidate values are sorted decreasingly, we take the last index to get the minimum value
+  Stability_values_SG <- c(Stability_values_SG, stab_values[index_of_stable_1sd]) # store stability value
+  # Define important and non-important variables
+  # Identify important and non-important variables
+  important_vars <- paste0("V", seq(p / 5, p, by = p / 5))  # Last element of each group
+  non_important_vars <- setdiff(paste0("V", 1:p), important_vars) # Non-important variables
+  S_stable_1sd <- as.data.frame(S_list[[index_of_stable_1sd]])  # Extract the selection matrix
+  col_means <- colMeans(S_stable_1sd) # Calculate column means
+  # Filter predictors with selection frequency > 0.6
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.6, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP6SG <- c(TP6SG, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP6SG <- c(FP6SG, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN6SG <- c(FN6SG, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN6SG <- c(TN6SG, tn_count)
+  # Filter predictors with selection frequency > 0.7
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.7, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP7SG <- c(TP7SG, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP7SG <- c(FP7SG, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN7SG <- c(FN7SG, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN7SG <- c(TN7SG, tn_count)
+  # Filter predictors with selection frequency > 0.8
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.8, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP8SG <- c(TP8SG, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP8SG <- c(FP8SG, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN8SG <- c(FN8SG, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN8SG <- c(TN8SG, tn_count)
+  # Filter predictors with selection frequency > 0.9
+  S_stable_1sd_filtered <- S_stable_1sd[, col_means > 0.9, drop = FALSE]
+  # Get selected variable names
+  selected_vars <- names(round(colMeans(S_stable_1sd_filtered), 3))
+  # True Positives (TP): Important variables selected
+  tp_count <- sum(selected_vars %in% important_vars)
+  TP9SG <- c(TP9SG, tp_count)
+  # False Positives (FP): Non-important variables selected
+  fp_count <- sum(selected_vars %in% non_important_vars)
+  FP9SG <- c(FP9SG, fp_count)
+  # False Negatives (FN): Important variables not selected
+  fn_count <- sum(!(important_vars %in% selected_vars))
+  FN9SG <- c(FN9SG, fn_count)
+  # True Negatives (TN): Non-important variables not selected
+  tn_count <- sum(!(non_important_vars %in% selected_vars))
+  TN9SG <- c(TN9SG, tn_count)
+}
+# Remove unnecessary objects and run the garbage collector
+rm(SGL_cv, SGL_model, sub_list, data_list, data, lasso_model, S, S_list, 
+   S_stable_1sd, stability_results, 
+   stab_values, x, y,
+   B, candidate_set, col_means, S_stable_1sd_filtered,
+   x_sub, i, index_of_stable_1sd, lambda, lambda_idx,
+   max_stability, y_sub, temp, seed, stability_1sd_threshold,
+   sample_index, significant_predictors,
+   fn_count, fp_count, important_vars, non_important_vars,
+   selected_vars, tn_count, tp_count, n, p, j, k, beta_hat); gc() 
+
+
+# Combine results into a data frame
+results <- data.frame(
+  'FP0.6' = FP6, 'TP0.6' = TP6, 'FN0.6' = FN6, 'TN0.6' = TN6, 
+  'FP0.7' = FP7, 'TP0.7' = TP7, 'FN0.7' = FN7, 'TN0.7' = TN7, 
+  'FP0.8' = FP8, 'TP0.8' = TP8, 'FN0.8' = FN8, 'TN0.8' = TN8, 
+  'FP0.9' = FP9, 'TP0.9' = TP9, 'FN0.9' = FN9, 'TN0.9' = TN9, 
+  'FP0.62' = FP6, 'TP0.62' = TP62, 'FN0.62' = FN62, 'TN0.62' = TN62, 
+  'FP0.72' = FP7, 'TP0.72' = TP72, 'FN0.72' = FN72, 'TN0.72' = TN72, 
+  'FP0.82' = FP8, 'TP0.82' = TP82, 'FN0.82' = FN82, 'TN0.82' = TN82, 
+  'FP0.92' = FP9, 'TP0.92' = TP92, 'FN0.92' = FN92, 'TN0.92' = TN92,
+  'FP0.6E' = FP6E, 'TP0.6E' = TP6E, 'FN0.6E' = FN6E, 'TN0.6E' = TN6E, 
+  'FP0.7E' = FP7E, 'TP0.7E' = TP7E, 'FN0.7E' = FN7E, 'TN0.7E' = TN7E, 
+  'FP0.8E' = FP8E, 'TP0.8E' = TP8E, 'FN0.8E' = FN8E, 'TN0.8E' = TN8E, 
+  'FP0.9E' = FP9E, 'TP0.9E' = TP9E, 'FN0.9E' = FN9E, 'TN0.9E' = TN9E,
+  'FP0.6S' = FP6S, 'TP0.6S' = TP6S, 'FN0.6S' = FN6S, 'TN0.6S' = TN6S, 
+  'FP0.7S' = FP7S, 'TP0.7S' = TP7S, 'FN0.7S' = FN7S, 'TN0.7S' = TN7S, 
+  'FP0.8S' = FP8S, 'TP0.8S' = TP8S, 'FN0.8S' = FN8S, 'TN0.8S' = TN8S, 
+  'FP0.9S' = FP9S, 'TP0.9S' = TP9S, 'FN0.9S' = FN9S, 'TN0.9S' = TN9S,
+  'FP0.6M' = FP6M, 'TP0.6M' = TP6M, 'FN0.6M' = FN6M, 'TN0.6M' = TN6M, 
+  'FP0.7M' = FP7M, 'TP0.7M' = TP7M, 'FN0.7M' = FN7M, 'TN0.7M' = TN7M, 
+  'FP0.8M' = FP8M, 'TP0.8M' = TP8M, 'FN0.8M' = FN8M, 'TN0.8M' = TN8M, 
+  'FP0.9M' = FP9M, 'TP0.9M' = TP9M, 'FN0.9M' = FN9M, 'TN0.9M' = TN9M,
+  'FP0.6SG' = FP6SG, 'TP0.6SG' = TP6SG, 'FN0.6SG' = FN6SG, 'TN0.6SG' = TN6SG, 
+  'FP0.7SG' = FP7SG, 'TP0.7SG' = TP7SG, 'FN0.7SG' = FN7SG, 'TN0.7SG' = TN7SG, 
+  'FP0.8SG' = FP8SG, 'TP0.8SG' = TP8SG, 'FN0.8SG' = FN8SG, 'TN0.8SG' = TN8SG, 
+  'FP0.9SG' = FP9SG, 'TP0.9SG' = TP9SG, 'FN0.9SG' = FN9SG, 'TN0.9SG' = TN9SG,
+  'S1' = Stability_values, 'S2' = Stability_values2, 
+  'SE' = Stability_values_E, 'SS' = Stability_values_S,
+  'SM' = Stability_values_M, 'SSG' = Stability_values_SG
+)
+
+
+
+# Function to calculate F1-score
+calculate_F1 <- function(results, thresholds) {
+  F1 <- data.frame(Threshold = character(), F1 = numeric(), stringsAsFactors = FALSE)
+  
+  for (t in thresholds) {
+    fp <- results[[paste0("FP0.", t)]]
+    tp <- results[[paste0("TP0.", t)]]
+    fn <- results[[paste0("FN0.", t)]]
+    tn <- results[[paste0("TN0.", t)]]
+    
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * (precision * recall) / (precision + recall))
+    
+    F1 <- rbind(F1, data.frame(Threshold = t, F1 = f1))
+  }
+  
+  return(F1)
+}
+
+
+tmp_df <- results[, c("S1", "S2", "SE", "SS", "SM", "SSG")]
+tmp_df <- melt(tmp_df)
+colnames(tmp_df) <- c("Method", "Stability")
+tmp_df$Method <- as.character(tmp_df$Method)
+tmp_df$Method[tmp_df$Method == "S1"] <- "Lasso"
+tmp_df$Method[tmp_df$Method == "S2"] <- "Lasso + Decorrelation"
+tmp_df$Method[tmp_df$Method == "SE"] <- "ENet"
+tmp_df$Method[tmp_df$Method == "SS"] <- "SCAD"
+tmp_df$Method[tmp_df$Method == "SM"] <- "MCP"
+tmp_df$Method[tmp_df$Method == "SSG"] <- "SGL"
+
+# Plotting the stability values across methods
+ggplot(tmp_df, aes(x = Method, y = Stability, fill = Method)) +
+  geom_boxplot() +
+  scale_fill_manual(values = friendly_pal("ito_seven")) + # Use the color-blind palette
+  labs(title = "Stability Comparison", x = "Method", y = "Stability") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 30),  # Center title and increase size
+    axis.title = element_text(size =25),  # Increase axis title size
+    axis.text = element_text(size = 14),   # Increase axis label size
+    legend.title = element_text(size = 22),  # Increase legend title size
+    legend.text = element_text(size = 20)    # Increase legend text size
+  )
+rm(tmp_df) # Remove temporary data frame
+
+
+
+# Calculate F1-scores for each method and threshold
+metrics_results1 <- calculate_F1(results, c('6', '62', '6E', '6S', '6M', '6SG'))
+metrics_results2 <- calculate_F1(results, c('7', '72', '7E', '7S', '7M', '7SG'))
+metrics_results3 <- calculate_F1(results, c('8', '82', '8E', '8S', '8M', '8SG'))
+metrics_results4 <- calculate_F1(results, c('9', '92', '9E', '9S', '9M', '9SG'))
+# Combine results into a single data frame
+metrics_results <- rbind(metrics_results1, metrics_results2, metrics_results3, metrics_results4)
+rm(metrics_results1, metrics_results2, metrics_results3, metrics_results4) # Remove temporary data frames
+
+# Add method names to the results
+metrics_results[, 3] <- rep(c('Lasso', 'Lasso + Decorrelation', 'ENet', 'SCAD', 'MCP', 'SGL'), 
+                            each = 100, times = 4)
+# Rename columns
+colnames(metrics_results) <- c("Threshold", "F1-score", "Method")
+
+# Convert Threshold to numeric
+metrics_results$Threshold[metrics_results$Threshold == 6] <- 0.6
+metrics_results$Threshold[metrics_results$Threshold == 62] <- 0.6
+metrics_results$Threshold[metrics_results$Threshold == '6S'] <- 0.6
+metrics_results$Threshold[metrics_results$Threshold == '6E'] <- 0.6
+metrics_results$Threshold[metrics_results$Threshold == '6M'] <- 0.6
+metrics_results$Threshold[metrics_results$Threshold == '6SG'] <- 0.6
+
+# Convert Threshold to numeric
+metrics_results$Threshold[metrics_results$Threshold == 7] <- 0.7
+metrics_results$Threshold[metrics_results$Threshold == 72] <- 0.7
+metrics_results$Threshold[metrics_results$Threshold == '7S'] <- 0.7
+metrics_results$Threshold[metrics_results$Threshold == '7E'] <- 0.7
+metrics_results$Threshold[metrics_results$Threshold == '7M'] <- 0.7
+metrics_results$Threshold[metrics_results$Threshold == '7SG'] <- 0.7
+
+# Convert Threshold to numeric
+metrics_results$Threshold[metrics_results$Threshold == 8] <- 0.8
+metrics_results$Threshold[metrics_results$Threshold == 82] <- 0.8
+metrics_results$Threshold[metrics_results$Threshold == '8S'] <- 0.8
+metrics_results$Threshold[metrics_results$Threshold == '8E'] <- 0.8
+metrics_results$Threshold[metrics_results$Threshold == '8M'] <- 0.8
+metrics_results$Threshold[metrics_results$Threshold == '8SG'] <- 0.8
+
+# Convert Threshold to numeric
+metrics_results$Threshold[metrics_results$Threshold == 9] <- 0.9
+metrics_results$Threshold[metrics_results$Threshold == 92] <- 0.9
+metrics_results$Threshold[metrics_results$Threshold == '9S'] <- 0.9
+metrics_results$Threshold[metrics_results$Threshold == '9E'] <- 0.9
+metrics_results$Threshold[metrics_results$Threshold == '9M'] <- 0.9
+metrics_results$Threshold[metrics_results$Threshold == '9SG'] <- 0.9
+
+# Convert columns to factors
+metrics_results$Method <- as.factor(metrics_results$Method)
+metrics_results$Threshold <- as.factor(metrics_results$Threshold)
+
+# Plotting average F1-scores across methods and thresholds
+ggplot(metrics_results, aes(x = Threshold, y = `F1-score`, fill = Method)) +
+  stat_summary(fun = "mean", geom = "bar", position = "dodge", width = 0.7) +  # Mean F1-score bars
+  scale_fill_manual(values = friendly_pal("ito_seven")) + # Use the color-blind friendly palette
+  labs(title = "F1-score Comparison", x = "Threshold", y = "F1-score Mean") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 30),  # Center title and increase size
+    axis.title = element_text(size = 25),  # Increase axis title size
+    axis.text = element_text(size = 14),   # Increase axis label size
+    legend.title = element_text(size = 22),  # Increase legend title size
+    legend.text = element_text(size = 20)    # Increase legend text size
+  )
+rm(metrics_results) # Remove temporary data frame
