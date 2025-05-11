@@ -1,6 +1,6 @@
 # Variable-Decorrelation
 
-This repository accompanies the paper "Stabilizing Lasso through Variable Decorrelation" and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript.
+This repository accompanies the paper "Stability Selection via Variable Decorrelation" and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript.
 
 ---
 
@@ -13,10 +13,10 @@ If you experience difficulties installing R packages, we recommend running the s
 ### Repository Structure  
 
 **1. `Code/`**  
-This folder contains R scripts used to generate the figures in the paper.  
-Each script is named according to its corresponding figure for easy identification. For example: `Figure2a.R` reproduces sub-figure (a) of Figure 2.
+This folder contains R scripts used to perform analysis, and generate the figures in the paper.  
+Each script is named according to its corresponding figure for easy identification. For example: `Fige1ab.R` reproduces sub-figure (a) and (b) of Figure 1.
 
-- `Toy_example.R` reproduces the toy example described in Section 2.
+- `Toy_example.R` reproduces the toy example described in Section 1.
 
 ---
 
