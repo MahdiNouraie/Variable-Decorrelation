@@ -14,7 +14,7 @@ If you experience difficulties installing R packages, we recommend running the s
 
 **1. `Code/`**  
 This folder contains R scripts used to perform analysis, and generate the figures in the paper.  
-Each script is named according to its corresponding figure for easy identification. For example: `Fige1ab.R` reproduces sub-figure (a) and (b) of Figure 1.
+Each script is named according to its corresponding figure for easy identification. For example: `Fig1ab.R` reproduces sub-figure (a) and (b) of Figure 1.
 
 - `Toy_example.R` reproduces the toy example described in Section 1.
 
