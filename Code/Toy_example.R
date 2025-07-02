@@ -62,7 +62,7 @@ p <- 5    # Number of predictors
 
 # Generate correlated predictors
 X1 <- rnorm(n)
-X2 <- 0.8 * X1  # X2 is highly correlated with X1
+X2 <- 0.9 * X1  # X2 is highly correlated with X1
 X3 <- rnorm(n)
 X4 <- rnorm(n)
 X5 <- rnorm(n)
@@ -85,7 +85,7 @@ cv_fit1 <- cv.glmnet(Q1, y, alpha = 1)
 lambda_opt1 <- cv_fit1$lambda.1se
 
 # Apply Lasso using the lambda
-lasso1 <- glmnet(X, y, alpha = 1, lambda = lambda_opt1)
+lasso1 <- glmnet(Q1, y, alpha = 1, lambda = lambda_opt1)
 
 # Change the order of columns in X
 X_reordered <- X[, c(2, 1, 3, 4, 5)]  # Swap X1 and X2 (highly correlated columns)
@@ -101,7 +101,7 @@ cv_fit2 <- cv.glmnet(Q2, y, alpha = 1)
 lambda_opt2 <- cv_fit2$lambda.1se
 
 # Apply Lasso using the lambda for reordered X
-lasso2 <- glmnet(X_reordered, y, alpha = 1, lambda = lambda_opt2)
+lasso2 <- glmnet(Q2, y, alpha = 1, lambda = lambda_opt2)
 
 # Display coefficients for both models
 cat("Coefficients for the first model (original order):\n")
