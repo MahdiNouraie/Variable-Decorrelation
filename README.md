@@ -1,6 +1,6 @@
 # Stability Selection via Variable Decorrelation
 
-This repository accompanies the paper "Stability Selection via Variable Decorrelation" and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript.
+This repository accompanies the paper "Stability Selection via Variable Decorrelation" and provides the R scripts necessary to reproduce the analyses and figures presented in the manuscript. [Preprint Version](https://arxiv.org/pdf/2505.20864)
 
 ---
 
