@@ -747,3 +747,4 @@ ggplot(metrics_results, aes(x = Threshold, y = `F1-score`, colour = Method, grou
     legend.title = element_text(size = 16),
     legend.text = element_text(size = 14)
   )
+
