@@ -1,4 +1,4 @@
-# This script reproduces Figure 13(a) and 13(d) of the paper
+# This script reproduces Figure 13(a) and 13(b) of the paper
 options(warn=-1) # Turn off warnings
 if (!requireNamespace("MASS")) {install.packages("MASS")} # install package if not already installed
 if (!requireNamespace("glmnet")) {install.packages("glmnet")} # install package if not already installed
